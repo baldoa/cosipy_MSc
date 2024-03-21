@@ -2,17 +2,17 @@
  This file reads the input data (model forcing) and write the output to netcdf file
 """
 
-import configparser
 import os
 import sys
-
-import numpy as np
-import pandas as pd
 import xarray as xr
-
-from config import *
+import pandas as pd
+import numpy as np
+import time
+from datetime import timedelta
+from cosipy.modules.radCor import correctRadiation
 from constants import *
-
+from config import * 
+import configparser
 
 class IOClass:
 
@@ -21,7 +21,7 @@ class IOClass:
 
         # Read variable list from file
         config = configparser.ConfigParser()
-        config.read('./cosipy/output')
+        config.read('./cosipy/output_gpen')   #(modified)
         self.atm = config['vars']['atm']
         self.internal = config['vars']['internal']
         self.full = config['vars']['full']
@@ -33,7 +33,7 @@ class IOClass:
       
         # If local IO class is initialized we need to get the dimensions of the dataset
         if DATA is not None:
-            self.time = self.DATA.sizes['time']
+            self.time = self.DATA.dims['time']
 
     #==============================================================================
     # Creates the input data and reads the restart file, if necessary. The function
@@ -42,7 +42,7 @@ class IOClass:
     def create_data_file(self):
         """ Returns the DATA xarray dataset"""
     
-        if restart:
+        if (restart==True):
             print('--------------------------------------------------------------')
             print('\t RESTART FROM PREVIOUS STATE')
             print('-------------------------------------------------------------- \n')
@@ -70,9 +70,9 @@ class IOClass:
             else:
                 self.DATA = self.DATA.isel(lat=slice(ystart,yend), lon=slice(xstart,xend))
 
-        self.ny = self.DATA.sizes[northing]
-        self.nx = self.DATA.sizes[easting]
-        self.time = self.DATA.sizes['time']
+        self.ny = self.DATA.dims[northing]
+        self.nx = self.DATA.dims[easting]
+        self.time = self.DATA.dims['time']
 
         return self.DATA
 
@@ -136,7 +136,7 @@ class IOClass:
         self.DATA['time'] = np.sort(self.DATA['time'].values)
         start_interval=str(self.DATA.time.values[0])[0:16]
         end_interval = str(self.DATA.time.values[-1])[0:16]
-        time_steps = str(self.DATA.sizes['time'])
+        time_steps = str(self.DATA.dims['time'])
         print('\n Maximum available time interval from %s until %s. Time steps: %s \n\n' % (start_interval, end_interval, time_steps))
 
         # Check if restart option is set
@@ -168,7 +168,7 @@ class IOClass:
         
         # Define a auxiliary function to check the validity of the data
         def check(field, max, min):
-            """Check the validity of the input data."""
+            '''Check the validity of the input data '''
             if np.nanmax(field) > max or np.nanmin(field) < min:
                 print('Please check the input data, its seems they are out of range %s MAX: %.2f MIN: %.2f \n' % (str.capitalize(field.name), np.nanmax(field), np.nanmin(field)))
         # Check if data is within valid bounds
@@ -358,6 +358,8 @@ class IOClass:
             self.B = np.full((self.time,self.ny,self.nx), np.nan)
         if ('QRR' in self.atm):
             self.QRR = np.full((self.time,self.ny,self.nx), np.nan)
+        if ('Gpen' in self.atm):  # (modified)
+            self.Gpen = np.full((self.time,self.ny,self.nx), np.nan)
         if ('MB' in self.internal):
             self.MB = np.full((self.time,self.ny,self.nx), np.nan)
         if ('surfMB' in self.internal):
@@ -422,12 +424,12 @@ class IOClass:
     # This function assigns the local results from the workers to the global
     # numpy arrays. The y and x values are the lat/lon indices.
     #==============================================================================
-    def copy_local_to_global(self,y,x,local_RAIN,local_SNOWFALL,local_LWin,local_LWout,local_H,local_LE,local_B,local_QRR,
+    def copy_local_to_global(self,y,x,local_RAIN,local_SNOWFALL,local_LWin,local_LWout,local_H,local_LE,local_B,local_QRR,local_Gpen,
                              local_MB, local_surfMB,local_Q,local_SNOWHEIGHT,local_TOTALHEIGHT,local_TS,local_ALBEDO, \
                              local_LAYERS,local_ME,local_intMB,local_EVAPORATION,local_SUBLIMATION,local_CONDENSATION, \
                              local_DEPOSITION,local_REFREEZE,local_subM,local_Z0,local_surfM,local_MOL,local_LAYER_HEIGHT, \
-                             local_LAYER_RHO,local_LAYER_T,local_LAYER_LWC,local_LAYER_CC,local_LAYER_POROSITY, \
-                             local_LAYER_ICE_FRACTION,local_LAYER_IRREDUCIBLE_WATER,local_LAYER_REFREEZE):
+			     local_LAYER_RHO,local_LAYER_T,local_LAYER_LWC,local_LAYER_CC,local_LAYER_POROSITY, \
+			     local_LAYER_ICE_FRACTION,local_LAYER_IRREDUCIBLE_WATER,local_LAYER_REFREEZE):
 
         if ('RAIN' in self.atm):
             self.RAIN[:,y,x] = local_RAIN
@@ -449,6 +451,8 @@ class IOClass:
             self.surfMB[:,y,x] = local_surfMB
         if ('MB' in self.internal):
             self.MB[:,y,x] = local_MB
+        if ('Gpen' in self.atm):   # (modified)
+            self.Gpen[:,y,x] = local_Gpen
         if ('Q' in self.internal):
             self.Q[:,y,x] = local_Q
         if ('SNOWHEIGHT' in self.internal):
@@ -526,6 +530,8 @@ class IOClass:
             self.add_variable_along_latlontime(self.RESULT, self.B, 'B', 'W m\u207b\xb2', 'Ground heat flux')
         if ('QRR' in self.atm):
             self.add_variable_along_latlontime(self.RESULT, self.QRR, 'QRR', 'W m\u207b\xb2', 'Rain heat flux')
+        if ('Gpen' in self.atm):   # (modified)
+            self.add_variable_along_latlontime(self.RESULT, self.Gpen, 'Gpen', 'W m\u207b\xb2', 'Penetrating SW radiation') 
         if ('surfMB' in self.internal):
             self.add_variable_along_latlontime(self.RESULT, self.surfMB, 'surfMB', 'm w.e.', 'Surface mass balance') 
         if ('MB' in self.internal):
@@ -564,7 +570,7 @@ class IOClass:
             self.add_variable_along_latlontime(self.RESULT, self.surfM, 'surfM', 'm w.e.', 'Surface melt') 
         if ('MOL' in self.internal):
             self.add_variable_along_latlontime(self.RESULT, self.MOL, 'MOL', '', 'Monin Obukhov length') 
-
+	            
         if full_field:
             if ('HEIGHT' in self.full):
                 self.add_variable_along_latlonlayertime(self.RESULT, self.LAYER_HEIGHT, 'LAYER_HEIGHT', 'm', 'Layer height') 
@@ -585,19 +591,6 @@ class IOClass:
             if ('REFREEZE' in self.full):
                 self.add_variable_along_latlonlayertime(self.RESULT, self.LAYER_REFREEZE, 'LAYER_REFREEZE', 'm w.e.', 'Refreezing') 
 
-    def create_empty_restart(self) -> xr.Dataset:
-        """Create an empty dataset for the RESTART attribute.
-
-        Returns:
-            Empty xarray dataset with coordinates from self.DATA.
-        """
-        dataset = xr.Dataset()
-        dataset.coords['time'] = self.DATA.coords['time'][-1]
-        dataset.coords['lat'] = self.DATA.coords['lat']
-        dataset.coords['lon'] = self.DATA.coords['lon']
-        dataset.coords['layer'] = np.arange(max_layers)
-
-        return dataset
 
     #----------------------------------------------
     # Initializes the restart xarray dataset
@@ -609,9 +602,13 @@ class IOClass:
             
             self.RESTART  ::  xarray structure"""
         
-        self.RESTART = self.create_empty_restart()
+        self.RESTART = xr.Dataset()
+        self.RESTART.coords['time'] = self.DATA.coords['time'][-1]
+        self.RESTART.coords['lat'] = self.DATA.coords['lat']
+        self.RESTART.coords['lon'] = self.DATA.coords['lon']
+        self.RESTART.coords['layer'] = np.arange(max_layers)
     
-        print('Restart dataset ... ok \n')
+        print('Restart ddataset ... ok \n')
         print('--------------------------------------------------------------\n')
         
         return self.RESTART
@@ -647,7 +644,11 @@ class IOClass:
             
             self.RESTART  ::  one-dimensional self.RESULT structure"""
     
-        self.RESTART = self.create_empty_restart()
+        self.RESTART = xr.Dataset()
+        self.RESTART.coords['time'] = self.DATA.coords['time'][-1]
+        self.RESTART.coords['lat'] = self.DATA.coords['lat']
+        self.RESTART.coords['lon'] = self.DATA.coords['lon']
+        self.RESTART.coords['layer'] = np.arange(max_layers)
         
         self.add_variable_along_scalar(self.RESTART, np.full((1), np.nan), 'NLAYERS', '-', 'Number of layers')
         self.add_variable_along_scalar(self.RESTART, np.full((1), np.nan), 'NEWSNOWHEIGHT', 'm .w.e', 'New snow height')
@@ -722,6 +723,9 @@ class IOClass:
     def QRR(self):
         return self.__QRR
     @property
+    def Gpen(self):
+        return self.__Gpen
+    @property
     def MB(self):
         return self.__MB
     
@@ -750,6 +754,9 @@ class IOClass:
     @QRR.setter
     def QRR(self, x):
         self.__QRR = x
+    @Gpen.setter
+    def Gpen(self, x):
+        self.__Gpen = x
     @MB.setter
     def MB(self, x):
         self.__MB = x
@@ -775,7 +782,7 @@ class IOClass:
     #==============================================================================
     def add_variable_along_scalar(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = var.data
+        ds[name] = var
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999
@@ -791,7 +798,7 @@ class IOClass:
     
     def add_variable_along_time(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = xr.DataArray(var.data, coords=[('time', ds.time)])
+        ds[name] = xr.DataArray(var, coords=[('time', ds.time)])
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999
@@ -807,7 +814,7 @@ class IOClass:
     
     def add_variable_along_latlonlayertime(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = (('time',northing,easting,'layer'), var.data)
+        ds[name] = (('time',northing,easting,'layer'), var)
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999
@@ -815,7 +822,7 @@ class IOClass:
     
     def add_variable_along_latlonlayer(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = ((northing,easting,'layer'), var.data)
+        ds[name] = ((northing,easting,'layer'), var)
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999
@@ -823,7 +830,7 @@ class IOClass:
     
     def add_variable_along_layertime(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = (('time','layer'), var.data)
+        ds[name] = (('time','layer'), var)
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999
@@ -831,7 +838,7 @@ class IOClass:
     
     def add_variable_along_layer(self, ds, var, name, units, long_name):
         """ This function self.adds missing variables to the self.DATA class """
-        ds[name] = (('layer'), var.data)
+        ds[name] = (('layer'), var)
         ds[name].attrs['units'] = units
         ds[name].attrs['long_name'] = long_name
         ds[name].encoding['_FillValue'] = -9999

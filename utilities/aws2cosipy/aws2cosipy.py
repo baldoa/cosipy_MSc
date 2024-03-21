@@ -4,6 +4,7 @@
  without a static file, in that file the static variables are created. For both cases, lapse rates can be determined
  in the aws2cosipyConfig.py file.
 """
+import os
 import sys
 import xarray as xr
 import pandas as pd
@@ -19,10 +20,13 @@ from metpy.units import units
 
 sys.path.append('../../')
 
-from utilities.aws2cosipy.aws2cosipyConfig import *
+# from utilities.aws2cosipy.aws2cosipyConfig import *
+from aws2cosipyConfig import *
 from cosipy.modules.radCor import *
 
 import argparse
+
+# cs_file = '20171031-20230207_WSS_JUNE_nosnow.csv'
 
 def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
     """ This function creates an input dataset from an offered csv file with input point data
@@ -31,7 +35,7 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
         Please note, there should be only one header line in the file.
 
         Latest update: 
-            Tobias Sauter 07.07.2019
+           Tobias Sauter 07.07.2019
 	        Anselm 04.07.2020
     """
 
@@ -42,21 +46,26 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
     #-----------------------------------
     # Read data
     #-----------------------------------
-    date_parser = lambda x: dateutil.parser.parse(x, ignoretz=True)
-    df = pd.read_csv(cs_file,
-       delimiter=',', index_col=['TIMESTAMP'],
-        parse_dates=['TIMESTAMP'], na_values='NAN',date_parser=date_parser)
+    # date_parser = lambda x: dateutil.parser.parse(x, ignoretz=True)
+    df = pd.read_csv(cs_file, index_col=['TIMESTAMP'])
+    df.index = pd.to_datetime(df.index, format='%Y-%m-%d %H:%M:%S')
+        # sep=',', skiprows = [0], encoding='latin-1',
+        # parse_dates=True, na_values='NaN', date_parser=date_parser, index_col=['TIMESTAMP'])   (modified)
 
     print(df[pd.isnull(df).any(axis=1)])
     df = df.fillna(method='ffill')
     print(df[pd.isnull(df).any(axis=1)])
 
+    df = df.rename(columns={"Tair": "T2_var", "Hum": "RH2_var", "Wspeed": "U2_var", "SWin_albedo": "G_var", "precip_HEFgradient": "RRR_var", "Press_Avg": "PRES_var", "LWin_corr": "LWin_var", "snowfall_fillna": "SNOWFALL_var", "Albedo": "ALBEDO_var"})  # modified
+    
     if (LWin_var not in df):
         df[LWin_var] = np.nan
     if (N_var not in df):
         df[N_var] = np.nan
     if (SNOWFALL_var not in df):
         df[SNOWFALL_var] = np.nan
+    if (ALBEDO_var not in df):
+        df[ALBEDO_var] = np.nan
  
     # Improved function to sum dataframe columns which contain nan's
     def nansumwrapper(a, **kwargs):
@@ -65,10 +74,10 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
         else:
             return np.nansum(a, **kwargs)
 
-    col_list = [T2_var,RH2_var,U2_var,G_var,RRR_var,PRES_var,LWin_var,N_var,SNOWFALL_var]
+    col_list = [T2_var,RH2_var,U2_var,G_var,RRR_var,PRES_var,LWin_var,N_var,SNOWFALL_var,ALBEDO_var]  # modified
     df = df[col_list]
     
-    df = df.resample('1H').agg({T2_var:np.mean, RH2_var:np.mean, U2_var:np.mean, G_var:np.mean, PRES_var:np.mean, RRR_var:nansumwrapper, LWin_var:np.mean, N_var:np.mean, SNOWFALL_var:nansumwrapper})
+    df = df.resample('1H').agg({T2_var:np.mean, RH2_var:np.mean, U2_var:np.mean, G_var:np.mean, PRES_var:np.mean, RRR_var:nansumwrapper, LWin_var:np.mean, N_var:np.mean, SNOWFALL_var:nansumwrapper, ALBEDO_var:np.mean}) #, Ts_var:np.mean})  modified
     df = df.dropna(axis=1,how='all')
     print(df.head())
 
@@ -139,6 +148,10 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
 
     if (SNOWFALL_var in df):
         df[SNOWFALL_var] = df[SNOWFALL_var].apply(pd.to_numeric, errors='coerce')
+        
+    # modified
+    if (ALBEDO_var in df):
+        df[ALBEDO_var] = df[ALBEDO_var].apply(pd.to_numeric, errors='coerce')    
 
     #-----------------------------------
     # Get values from file
@@ -155,6 +168,7 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
         print('Minimum temperature is: %s K please check the input temperature' % (np.nanmin(T2)))
         sys.exit()
 
+    # Ts_obs = df[Ts_var].values - 273.15                                                         # Surface temperature  (modified)
     RH2 = df[RH2_var].values + (hgt - stationAlt) * lapse_RH                                    # Relative humidity
     U2 = df[U2_var].values                                                                      # Wind velocity
     G = df[G_var].values                                                                        # Incoming shortwave radiation
@@ -174,6 +188,9 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
 
     if(N_var in df):
         N = df[N_var].values                                                                    # Cloud cover fraction
+
+    if(ALBEDO_var in df):
+        ALBEDO = df[ALBEDO_var].values                                                          # albedo (modified)
 
     # Change aspect to south==0, east==negative, west==positive
     if (static_file):
@@ -204,6 +221,7 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
     add_variable_along_point(ds, slope, 'SLOPE', 'degrees', 'Terrain slope')
     add_variable_along_point(ds, mask, 'MASK', 'boolean', 'Glacier mask')
     add_variable_along_timelatlon_point(ds, T2, 'T2', 'K', 'Temperature at 2 m')
+    # add_variable_along_timelatlon_point(ds, Ts_obs, 'Tsurf', '°C', 'Temperature surface observed')   (modified)
     add_variable_along_timelatlon_point(ds, RH2, 'RH2', '%', 'Relative humidity at 2 m')
     add_variable_along_timelatlon_point(ds, U2, 'U2', 'm s\u207b\xb9', 'Wind velocity at 2 m')
     add_variable_along_timelatlon_point(ds, G, 'G', 'W m\u207b\xb2', 'Incoming shortwave radiation')
@@ -220,6 +238,10 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
 
     if(N_var in df):
         add_variable_along_timelatlon_point(ds, N, 'N', '%', 'Cloud cover fraction')
+    
+    # modified
+    if(ALBEDO_var in df):
+        add_variable_along_timelatlon_point(ds, ALBEDO, 'ALBEDO', '[]', 'Albedo from observations')
 
     #-----------------------------------
     # Write file to disc 
@@ -250,7 +272,12 @@ def create_1D_input(cs_file, cosipy_file, static_file, start_date, end_date):
 
     if (N_var in df):
         check(ds.N, 1.0, 0.0)
+    
+    # modified
+    if (ALBEDO_var in df):
+        check(ds.ALBEDO, 1.0, 0.0)
 
+# THIS FUNCTION HAS NOT BEEN MODIFIED TO INCLUDE ALBEDO AS INPUT PARAMETER
 def create_2D_input(cs_file, cosipy_file, static_file, start_date, end_date, x0=None, x1=None, y0=None, y1=None):
     """ This function creates an input dataset from an offered csv file with input point data
         Here you need to define how to interpolate the data.
@@ -683,21 +710,21 @@ def compute_scale_and_offset(min, max, n):
     return (scale_factor, add_offset)
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     
-    parser = argparse.ArgumentParser(description='Create 2D input file from csv file.')
-    parser.add_argument('-c', '-csv_file', dest='csv_file', help='Csv file(see readme for file convention)')
-    parser.add_argument('-o', '-cosipy_file', dest='cosipy_file', help='Name of the resulting COSIPY file')
-    parser.add_argument('-s', '-static_file', dest='static_file', help='Static file containing DEM, Slope etc.')
-    parser.add_argument('-b', '-start_date', dest='start_date', help='Start date')
-    parser.add_argument('-e', '-end_date', dest='end_date', help='End date')
-    parser.add_argument('-xl', '-xl', dest='xl', type=float, const=None, help='left longitude value of the subset')
-    parser.add_argument('-xr', '-xr', dest='xr', type=float, const=None, help='right longitude value of the subset')
-    parser.add_argument('-yl', '-yl', dest='yl', type=float, const=None, help='lower latitude value of the subset')
-    parser.add_argument('-yu', '-yu', dest='yu', type=float, const=None, help='upper latitude value of the subset')
+#     parser = argparse.ArgumentParser(description='Create 2D input file from csv file.')
+#     parser.add_argument('-c', '-csv_file', dest='csv_file', help='Csv file(see readme for file convention)')
+#     parser.add_argument('-o', '-cosipy_file', dest='cosipy_file', help='Name of the resulting COSIPY file')
+#     parser.add_argument('-s', '-static_file', dest='static_file', help='Static file containing DEM, Slope etc.')
+#     parser.add_argument('-b', '-start_date', dest='start_date', help='Start date')
+#     parser.add_argument('-e', '-end_date', dest='end_date', help='End date')
+#     parser.add_argument('-xl', '-xl', dest='xl', type=float, const=None, help='left longitude value of the subset')
+#     parser.add_argument('-xr', '-xr', dest='xr', type=float, const=None, help='right longitude value of the subset')
+#     parser.add_argument('-yl', '-yl', dest='yl', type=float, const=None, help='lower latitude value of the subset')
+#     parser.add_argument('-yu', '-yu', dest='yu', type=float, const=None, help='upper latitude value of the subset')
 
-    args = parser.parse_args()
-    if point_model:
-        create_1D_input(args.csv_file, args.cosipy_file, args.static_file, args.start_date, args.end_date) 
-    else:
-        create_2D_input(args.csv_file, args.cosipy_file, args.static_file, args.start_date, args.end_date, args.xl, args.xr, args.yl, args.yu) 
+#     args = parser.parse_args()
+#     if point_model:
+#         create_1D_input(args.csv_file, args.cosipy_file, args.static_file, args.start_date, args.end_date) 
+#     else:
+#         create_2D_input(args.csv_file, args.cosipy_file, args.static_file, args.start_date, args.end_date, args.xl, args.xr, args.yl, args.yu) 
